@@ -12,13 +12,19 @@
     "build": "tsc && node -e \"require('fs').copyFileSync('src/ntlm.d.ts', 'lib/ntlm.d.ts')\""
   },
   "author": "CatButtes",
+  "contributors": [
+    {
+      "name": "Muresan Sorin",
+      "url": "https://github.com/vision10"
+    }
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/catbuttes/axios-ntlm.git"
+    "url": "git+https://github.com/vision10/axios-ntlm.git"
   },
   "bugs": {
-    "url": "https://github.com/catbuttes/axios-ntlm/issues"
+    "url": "https://github.com/vision10/axios-ntlm/issues"
   },
   "keywords": [
     "axios",
@@ -28,14 +34,13 @@
     "windows",
     "auth"
   ],
-  "homepage": "https://buttes.dev/axios-ntlm/",
-  "devDependencies": {
-    "@types/node": "^18.19.130",
-    "typescript": "^7.0.2"
-  },
   "dependencies": {
     "axios": "^1.20.0",
     "des.js": "^1.1.0",
     "js-md4": "^0.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "typescript": "^7.0.2"
   }
 }
