@@ -5,12 +5,16 @@ export { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse };
  * @property password The password of the user you are authenticating as.
  * @property domain The domain of the user you are authenticating as.
  * @property workstation The workstation in use. Defaults to the current hostname if undefined.
+ * @property forceNtlmV2 Force NTLMv2 response generation even if the server doesn't advertise it; needed by some domain controllers with a strict LmCompatibilityLevel.
+ * @property channelBinding Send a TLS channel binding token (Extended Protection for Authentication). Only enable for HTTPS servers that require EPA.
  */
 export interface NtlmCredentials {
     readonly username: string;
     readonly password: string;
     readonly domain: string;
     readonly workstation?: string;
+    readonly forceNtlmV2?: boolean;
+    readonly channelBinding?: boolean;
 }
 /**
 * @param credentials An NtlmCredentials object containing the username and password

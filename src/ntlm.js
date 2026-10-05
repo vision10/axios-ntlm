@@ -25,10 +25,10 @@ function createType1Message(workstation, target) {
 
 	//flags
 	buf.writeUInt32LE(flags.NTLMFLAG_NEGOTIATE_OEM |
-						flags.NTLMFLAG_REQUEST_TARGET |
-						flags.NTLMFLAG_NEGOTIATE_NTLM_KEY |
-						flags.NTLMFLAG_NEGOTIATE_NTLM2_KEY |
-						flags.NTLMFLAG_NEGOTIATE_ALWAYS_SIGN, pos);
+		flags.NTLMFLAG_REQUEST_TARGET |
+		flags.NTLMFLAG_NEGOTIATE_NTLM_KEY |
+		flags.NTLMFLAG_NEGOTIATE_NTLM2_KEY |
+		flags.NTLMFLAG_NEGOTIATE_ALWAYS_SIGN, pos);
 	pos += 4;
 
 	//domain security buffer
@@ -91,6 +91,9 @@ function decodeType2Message(str) {
 		throw new Error('Invalid message type (no type 2)');
 	}
 
+	//raw bytes, needed later to compute the MIC over Type1 || Type2 || Type3
+	obj.raw = buf;
+
 	//read flags
 	obj.flags = buf.readUInt32LE(20);
 
@@ -101,7 +104,7 @@ function decodeType2Message(str) {
 	obj.challenge = buf.slice(24, 32);
 
 	//read target name
-	obj.targetName = (function(){
+	obj.targetName = (function () {
 		let length = buf.readUInt16LE(12);
 		//skipping allocated space
 		let offset = buf.readUInt32LE(16);
@@ -119,7 +122,7 @@ function decodeType2Message(str) {
 
 	//read target info
 	if (obj.flags & flags.NTLMFLAG_NEGOTIATE_TARGET_INFO) {
-		obj.targetInfo = (function(){
+		obj.targetInfo = (function () {
 			let info = {};
 
 			let length = buf.readUInt16LE(40);
@@ -153,27 +156,22 @@ function decodeType2Message(str) {
 				let blockTypeStr;
 
 				switch (blockType) {
-					case 1:
-						blockTypeStr = 'SERVER';
-						break;
-					case 2:
-						blockTypeStr = 'DOMAIN';
-						break;
-					case 3:
-						blockTypeStr = 'FQDN';
-						break;
-					case 4:
-						blockTypeStr = 'DNS';
-						break;
-					case 5:
-						blockTypeStr = 'PARENT_DNS';
-						break;
-					default:
-						blockTypeStr = '';
-						break;
+					case 1: blockTypeStr = 'SERVER'; break;
+					case 2: blockTypeStr = 'DOMAIN'; break;
+					case 3: blockTypeStr = 'FQDN'; break;
+					case 4: blockTypeStr = 'DNS'; break;
+					case 5: blockTypeStr = 'PARENT_DNS'; break;
+					case 6: blockTypeStr = 'FLAGS'; break;
+					case 7: blockTypeStr = 'TIMESTAMP'; break;
+					case 10: blockTypeStr = 'CHANNEL_BINDINGS'; break;
+					default: blockTypeStr = ''; break;
 				}
 
-				if (blockTypeStr) {
+				if (blockTypeStr === 'FLAGS') {
+					info[blockTypeStr] = buf.readUInt32LE(pos);
+				} else if (blockTypeStr === 'TIMESTAMP' || blockTypeStr === 'CHANNEL_BINDINGS') {
+					info[blockTypeStr] = buf.slice(pos, pos + blockLength);
+				} else if (blockTypeStr) {
 					info[blockTypeStr] = buf.toString('ucs2', pos, pos + blockLength);
 				}
 
@@ -182,15 +180,22 @@ function decodeType2Message(str) {
 
 			return {
 				parsed: info,
-				buffer: targetInfoBuffer
+				buffer: targetInfoBuffer,
+				timestamp: info.TIMESTAMP,
+				//MsvAvFlags bit 0x2: server requires the client to provide a MIC in the Type 3 message
+				micRequired: Boolean(info.FLAGS && (info.FLAGS & 0x2))
 			};
 		})();
 	}
 
+	obj.micRequired = Boolean(obj.targetInfo && obj.targetInfo.micRequired);
+
 	return obj;
 }
 
-function createType3Message(type2Message, username, password, workstation, target) {
+function createType3Message(type2Message, username, password, workstation, target, options) {
+	options = options || {};
+
 	let dataPos = 52,
 		buf = new Buffer.alloc(1024);
 
@@ -208,13 +213,27 @@ function createType3Message(type2Message, username, password, workstation, targe
 	//message type
 	buf.writeUInt32LE(3, 8);
 
-	if (type2Message.version === 2) {
-		dataPos = 64;
+	let useV2 = Boolean(options.forceNtlmV2) || type2Message.version === 2;
+
+	if (useV2 && !type2Message.targetInfo) {
+		throw new Error('Server did not supply NTLM target info; a NTLMv2 response cannot be generated.');
+	}
+
+	//the server requires a MIC; this also needs the original Type 1 message bytes to compute it
+	let micRequired = useV2 && type2Message.micRequired && Boolean(options.type1Message);
+	let sessionBaseKey;
+
+	if (useV2) {
+		//MIC occupies 16 bytes directly after the fixed header (we never negotiate the optional Version field)
+		dataPos = micRequired ? 80 : 64;
 
 		let ntlmHash = hash.createNTLMHash(password),
 			nonce = hash.createPseudoRandomValue(16),
 			lmv2 = hash.createLMv2Response(type2Message, username, ntlmHash, nonce, target),
-			ntlmv2 = hash.createNTLMv2Response(type2Message, username, ntlmHash, nonce, target);
+			ntlmv2 = hash.createNTLMv2Response(type2Message, username, ntlmHash, nonce, target, {
+				serverTimestamp: type2Message.targetInfo.timestamp,
+				channelBindingValue: options.channelBindingValue
+			});
 
 		//lmv2 security buffer
 		buf.writeUInt16LE(lmv2.length, 12);
@@ -223,7 +242,7 @@ function createType3Message(type2Message, username, password, workstation, targe
 
 		lmv2.copy(buf, dataPos);
 		dataPos += lmv2.length;
-		
+
 		//ntlmv2 security buffer
 		buf.writeUInt16LE(ntlmv2.length, 20);
 		buf.writeUInt16LE(ntlmv2.length, 22);
@@ -231,6 +250,10 @@ function createType3Message(type2Message, username, password, workstation, targe
 
 		ntlmv2.copy(buf, dataPos);
 		dataPos += ntlmv2.length;
+
+		if (micRequired) {
+			sessionBaseKey = hash.createSessionBaseKey(ntlmHash, username, target, ntlmv2.slice(0, 16));
+		}
 	} else {
 		let lmHash = hash.createLMHash(password),
 			ntlmHash = hash.createNTLMHash(password),
@@ -275,7 +298,7 @@ function createType3Message(type2Message, username, password, workstation, targe
 
 	dataPos += buf.write(workstation, dataPos, type2Message.encoding);
 
-	if (type2Message.version === 2) {
+	if (useV2) {
 		//session key security buffer
 		buf.writeUInt16LE(0, 52);
 		buf.writeUInt16LE(0, 54);
@@ -283,6 +306,16 @@ function createType3Message(type2Message, username, password, workstation, targe
 
 		//flags
 		buf.writeUInt32LE(type2Message.flags, 60);
+
+		//MIC field (bytes 64-79, left zeroed) is filled in below once the whole message is known
+	}
+
+	if (micRequired) {
+		let type1Buffer = new Buffer.from(options.type1Message.replace(/^NTLM /, ''), 'base64'),
+			type2Buffer = type2Message.raw,
+			mic = hash.createMessageIntegrityCode(sessionBaseKey, type1Buffer, type2Buffer, buf.slice(0, dataPos));
+
+		mic.copy(buf, 64);
 	}
 
 	return 'NTLM ' + buf.toString('base64', 0, dataPos);
@@ -291,5 +324,6 @@ function createType3Message(type2Message, username, password, workstation, targe
 module.exports = {
 	createType1Message,
 	decodeType2Message,
-	createType3Message
+	createType3Message,
+	createChannelBindingHash: hash.createChannelBindingHash
 };
