@@ -1,11 +1,13 @@
 {
   "name": "axios-ntlm2",
-  "version": "1.6.0",
+  "version": "1.5.0",
   "description": "An NTLM auth extension to the Axios HTTP library",
   "main": "lib/ntlmClient.js",
   "types": "lib/ntlmClient.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "!lib/src",
+    "!lib/tsconfig.tsbuildinfo"
   ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
